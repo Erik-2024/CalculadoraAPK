@@ -37,7 +37,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ── Paleta de colores ─────────────────────────────────────────────────────────
 object CalcColors {
     val NumFondo     = Color(0xFF1E2050)
     val NumTexto     = Color(0xFFCDD4FF)
@@ -56,12 +55,9 @@ object CalcColors {
 }
 
 enum class TipoBoton { NUMERO, ESPECIAL, OPERADOR, IGUAL, NEUTRO }
-
-// ── Evaluador con paréntesis y precedencia ────────────────────────────────────
 class Evaluador(private val expr: String) {
     private var pos = 0
     fun evaluar(): Double = parseExpresion()
-
     private fun parseExpresion(): Double {
         var r = parseTerm()
         while (pos < expr.length && (expr[pos] == '+' || expr[pos] == '-')) {
@@ -102,7 +98,6 @@ class Evaluador(private val expr: String) {
         while (pos < expr.length && (expr[pos].isDigit() || expr[pos] == '.')) pos++
         return expr.substring(ini, pos).toDoubleOrNull() ?: 0.0
     }
-
     private fun skip() { while (pos < expr.length && expr[pos] == ' ') pos++ }
 }
 
@@ -123,90 +118,158 @@ fun calcular(expr: String): String {
 
 fun esOp(c: Char?): Boolean = c in listOf('+', '-', '×', '÷')
 
-// ── Pantalla principal ────────────────────────────────────────────────────────
 @Composable
 fun CalculadoraScreen(modifier: Modifier = Modifier) {
-
+    var expresion        by remember { mutableStateOf("") }
     var display          by remember { mutableStateOf("0") }
-    var operadorActivo   by remember { mutableStateOf("") }
-    var primerOperando   by remember { mutableStateOf("") }
-    var nuevoNumero      by remember { mutableStateOf(true) }
+    var parentesisAbiertos by remember { mutableIntStateOf(0) }
+    var recienIgual      by remember { mutableStateOf(false) }
     var cCount           by remember { mutableIntStateOf(0) }
-
     fun formatear(v: Double): String {
         if (v.isNaN() || v.isInfinite()) return "Error"
         return if (v % 1.0 == 0.0) v.toLong().toString()
         else v.toBigDecimal().stripTrailingZeros().toPlainString()
     }
 
+    fun ultimoChar(): Char? = expresion.trimEnd().lastOrNull()
     fun ingresarDigito(d: String) {
         cCount = 0
-        display = if (nuevoNumero) { nuevoNumero = false; d }
-        else if (display == "0") d else display + d
+        if (recienIgual) {
+            expresion = d
+            recienIgual = false
+        } else {
+            val uc = ultimoChar()
+            if (uc == ')') {
+                expresion += "×$d"
+            } else {
+                expresion = if (expresion == "0" || expresion.isEmpty()) d else expresion + d
+            }
+        }
+        display = expresion
     }
 
     fun ingresarPunto() {
         cCount = 0
-        if (nuevoNumero) { display = "0."; nuevoNumero = false; return }
-        if (!display.contains(".")) display += "."
+        if (recienIgual) { expresion = "0."; recienIgual = false; display = expresion; return }
+        val uc = ultimoChar()
+        if (uc == null || esOp(uc) || uc == '(') {
+            expresion += "0."
+        } else if (uc?.isDigit() == true) {
+            val ultimoSegmento = expresion.split("+", "-", "×", "÷", "(", ")").last()
+            if (!ultimoSegmento.contains(".")) expresion += "."
+        }
+        display = expresion
     }
 
     fun ingresarOperador(op: String) {
         cCount = 0
-        if (operadorActivo.isNotEmpty() && !nuevoNumero) {
-            val resultado = calcular("$primerOperando$operadorActivo$display")
-            primerOperando = resultado
-            display = "0"
-        } else {
-            primerOperando = display
-            display = "0"
+        if (recienIgual) recienIgual = false
+        val uc = ultimoChar()
+        when {
+            expresion.isEmpty() || expresion == "0" -> {
+                if (op == "-") { expresion = "-"; display = expresion; return }
+            }
+            esOp(uc) -> {
+                expresion = expresion.dropLast(1) + op
+                display = expresion
+                return
+            }
+            uc == '(' -> {
+                if (op == "-") { expresion += op; display = expresion; return }
+                return
+            }
         }
-        operadorActivo = op
-        nuevoNumero = true
+        expresion += op
+        display = expresion
     }
 
     fun alternarSigno() {
         cCount = 0
-        if (display == "0") return
-        display = if (display.startsWith("-")) display.removePrefix("-") else "-$display"
+        if (expresion.isEmpty() || expresion == "0") return
+        val uc = ultimoChar()
+        if (uc?.isDigit() == true || uc == ')') {
+            val ultimoOp = expresion.indexOfLast { esOp(it) || it == '(' }
+            val numPart = expresion.substring(ultimoOp + 1)
+            val prefix = expresion.substring(0, ultimoOp + 1)
+            expresion = if (numPart.startsWith("-")) prefix + numPart.removePrefix("-")
+            else "$prefix-$numPart"
+            display = expresion
+        }
     }
 
     fun porcentaje() {
         cCount = 0
-        val v = display.toDoubleOrNull() ?: return
-        display = formatear(v / 100.0)
+        val uc = ultimoChar()
+        if (uc?.isDigit() == true || uc == ')') {
+            val ultimoOp = expresion.indexOfLast { esOp(it) || it == '(' }
+            val numPart = expresion.substring(ultimoOp + 1)
+            val prefix = expresion.substring(0, ultimoOp + 1)
+            val v = try { calcular(numPart).toDouble() } catch (e: Exception) { return }
+            expresion = prefix + formatear(v / 100.0)
+            display = expresion
+        }
     }
 
     fun ingresarParentesis() {
         cCount = 0
-        // En modo clásico no aplica paréntesis al display directo,
-        // pero dejamos el botón funcional para no romper el layout
+        if (recienIgual) { expresion = "("; parentesisAbiertos = 1; recienIgual = false; display = expresion; return }
+        val uc = ultimoChar()
+        val debeAbrir = when {
+            expresion.isEmpty() || expresion == "0" -> true
+            uc == '(' -> true
+            esOp(uc) -> true
+            parentesisAbiertos == 0 -> {
+                if (uc?.isDigit() == true || uc == ')') {
+                    expresion += "×"
+                }
+                true
+            }
+            uc?.isDigit() == true || uc == '.' -> false
+            uc == ')' -> false
+            else -> true
+        }
+        if (debeAbrir) {
+            expresion += "("
+            parentesisAbiertos++
+        } else {
+            expresion += ")"
+            parentesisAbiertos--
+        }
+        display = expresion
     }
 
     fun manejarIgual() {
         cCount = 0
-        if (operadorActivo.isEmpty()) return
-        val resultado = calcular("$primerOperando$operadorActivo$display")
+        if (expresion.isEmpty() || expresion == "0") return
+        val exprCompleta = expresion + ")".repeat(parentesisAbiertos)
+        val resultado = calcular(exprCompleta)
+        expresion = resultado
         display = resultado
-        operadorActivo = ""
-        primerOperando = ""
-        nuevoNumero = true
+        parentesisAbiertos = 0
+        recienIgual = true
     }
 
     fun manejarC() {
         cCount++
-        display = "0"
-        nuevoNumero = true
         if (cCount >= 2) {
-            operadorActivo = ""
-            primerOperando = ""
+            expresion = ""
+            display = "0"
+            parentesisAbiertos = 0
+            recienIgual = false
             cCount = 0
+        } else {
+            if (expresion.isNotEmpty()) {
+                val removido = expresion.last()
+                if (removido == '(') parentesisAbiertos = maxOf(0, parentesisAbiertos - 1)
+                else if (removido == ')') parentesisAbiertos++
+                expresion = expresion.dropLast(1)
+            }
+            display = if (expresion.isEmpty()) "0" else expresion
+            recienIgual = false
         }
     }
 
-    val textoArriba = if (operadorActivo.isNotEmpty()) "$primerOperando $operadorActivo" else ""
-
-    // ── UI ────────────────────────────────────────────────────────────────────
+    val textoArriba = if (parentesisAbiertos > 0) "( ".repeat(parentesisAbiertos).trimEnd() else ""
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -218,8 +281,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
                 .padding(14.dp),
             verticalArrangement = Arrangement.Bottom
         ) {
-
-            // ── Display ───────────────────────────────────────────────────────
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -233,7 +294,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.End
                 ) {
-                    // Primer operando + operador (arriba, gris)
                     Text(
                         text = textoArriba,
                         color = CalcColors.DisplaySub,
@@ -245,10 +305,7 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 26.dp)
                     )
-
                     Spacer(modifier = Modifier.height(6.dp))
-
-                    // Número actual (abajo, grande, blanco)
                     Text(
                         text = display,
                         color = CalcColors.DisplayTexto,
@@ -266,8 +323,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
             }
 
             Spacer(modifier = Modifier.height(18.dp))
-
-            // ── Fila 1: C | () | % | ÷ ───────────────────────────────────────
             FilaBotones {
                 BotonCalc("C",  TipoBoton.ESPECIAL, Modifier.weight(1f)) { manejarC() }
                 BotonCalc("()", TipoBoton.ESPECIAL, Modifier.weight(1f)) { ingresarParentesis() }
@@ -275,8 +330,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
                 BotonCalc("÷",  TipoBoton.OPERADOR, Modifier.weight(1f)) { ingresarOperador("÷") }
             }
             Spacer(modifier = Modifier.height(10.dp))
-
-            // ── Fila 2: 7 | 8 | 9 | × ───────────────────────────────────────
             FilaBotones {
                 BotonCalc("7", TipoBoton.NUMERO,   Modifier.weight(1f)) { ingresarDigito("7") }
                 BotonCalc("8", TipoBoton.NUMERO,   Modifier.weight(1f)) { ingresarDigito("8") }
@@ -284,8 +337,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
                 BotonCalc("×", TipoBoton.OPERADOR, Modifier.weight(1f)) { ingresarOperador("×") }
             }
             Spacer(modifier = Modifier.height(10.dp))
-
-            // ── Fila 3: 4 | 5 | 6 | - ───────────────────────────────────────
             FilaBotones {
                 BotonCalc("4", TipoBoton.NUMERO,   Modifier.weight(1f)) { ingresarDigito("4") }
                 BotonCalc("5", TipoBoton.NUMERO,   Modifier.weight(1f)) { ingresarDigito("5") }
@@ -293,8 +344,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
                 BotonCalc("-", TipoBoton.OPERADOR, Modifier.weight(1f)) { ingresarOperador("-") }
             }
             Spacer(modifier = Modifier.height(10.dp))
-
-            // ── Fila 4: 1 | 2 | 3 | + ───────────────────────────────────────
             FilaBotones {
                 BotonCalc("1", TipoBoton.NUMERO,   Modifier.weight(1f)) { ingresarDigito("1") }
                 BotonCalc("2", TipoBoton.NUMERO,   Modifier.weight(1f)) { ingresarDigito("2") }
@@ -302,8 +351,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
                 BotonCalc("+", TipoBoton.OPERADOR, Modifier.weight(1f)) { ingresarOperador("+") }
             }
             Spacer(modifier = Modifier.height(10.dp))
-
-            // ── Fila 5: +/- | 0 | . | = ─────────────────────────────────────
             FilaBotones {
                 BotonCalc("+/-", TipoBoton.NEUTRO, Modifier.weight(1f)) { alternarSigno() }
                 BotonCalc("0",   TipoBoton.NUMERO, Modifier.weight(1f)) { ingresarDigito("0") }
@@ -315,8 +362,6 @@ fun CalculadoraScreen(modifier: Modifier = Modifier) {
     }
 }
 
-// ── Componentes reutilizables ─────────────────────────────────────────────────
-
 @Composable
 fun FilaBotones(content: @Composable RowScope.() -> Unit) {
     Row(
@@ -325,7 +370,6 @@ fun FilaBotones(content: @Composable RowScope.() -> Unit) {
         content = content
     )
 }
-
 @Composable
 fun BotonCalc(
     texto: String,
@@ -339,7 +383,6 @@ fun BotonCalc(
         animationSpec = tween(80),
         label = "escala"
     )
-
     val (fondoInicio, fondoFin, textoColor) = when (tipo) {
         TipoBoton.NUMERO   -> Triple(CalcColors.NumFondo,    CalcColors.NumFondo.copy(alpha = 0.7f), CalcColors.NumTexto)
         TipoBoton.ESPECIAL -> Triple(CalcColors.EspFondo,    CalcColors.EspFondo.copy(alpha = 0.6f), CalcColors.EspTexto)
@@ -347,7 +390,6 @@ fun BotonCalc(
         TipoBoton.IGUAL    -> Triple(CalcColors.IgualA,      CalcColors.IgualB,                      CalcColors.IgualTexto)
         TipoBoton.NEUTRO   -> Triple(CalcColors.NeutroFondo, CalcColors.NeutroFondo,                 CalcColors.NeutroTexto)
     }
-
     Box(
         modifier = modifier
             .height(72.dp)
@@ -382,7 +424,6 @@ fun BotonCalc(
     }
 }
 
-// ── Preview ───────────────────────────────────────────────────────────────────
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
 fun CalculadoraPreview() {
